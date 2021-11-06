@@ -3,6 +3,8 @@ package coordinator;
 
 service Coordinator {
   rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc RequestJob (WorkerDescription) returns (JobDescription);
+  rpc JobDone (JobDescription) returns (JobDescription);
 }
 
 message HelloRequest {
@@ -11,4 +13,13 @@ message HelloRequest {
 
 message HelloReply {
   string message = 1;
+}
+
+message WorkerDescription {
+  string name = 1;
+}
+
+message JobDescription {
+  int32 id = 1;
+  string file_path = 2;
 }
