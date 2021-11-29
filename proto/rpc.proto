@@ -2,24 +2,21 @@ syntax = "proto3";
 package coordinator;
 
 service Coordinator {
-  rpc SayHello (HelloRequest) returns (HelloReply);
-  rpc RequestJob (WorkerDescription) returns (JobDescription);
-  rpc JobDone (JobDescription) returns (JobDescription);
-}
-
-message HelloRequest {
-  string name = 1;
-}
-
-message HelloReply {
-  string message = 1;
+  rpc RequestTask (WorkerDescription) returns (TaskDescription);
+  rpc TaskDone (TaskDescription) returns (TaskDescription);
 }
 
 message WorkerDescription {
-  string name = 1;
+  bytes uuid = 1;
 }
 
-message JobDescription {
-  int32 id = 1;
-  string file_path = 2;
+message TaskDescription {
+  uint32 id = 1;
+  enum TaskType {
+    MAP = 0;
+    REDUCE = 1;
+  }
+  TaskType task_type = 2;
+  uint32 n = 3;
+  repeated string files = 4;
 }

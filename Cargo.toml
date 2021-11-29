@@ -7,16 +7,17 @@ edition = "2018"
 
 [[bin]]
 name = "coordinator"
-path = "src/coordinator.rs"
+path = "bin/coordinator.rs"
 
 [[bin]]
 name = "worker"
-path = "src/worker.rs"
+path = "bin/worker.rs"
 
 [dependencies]
 tonic = "0.6"
 prost = "0.9"
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread"]  }
+uuid = { version = "0.4", features = ["v4"] }
 
 [build-dependencies]
 tonic-build = "0.6"
