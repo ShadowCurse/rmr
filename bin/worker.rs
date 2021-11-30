@@ -8,7 +8,18 @@ impl worker::WorkerTrait for MyWorker {
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         let words = value
             .split_ascii_whitespace()
-            .map(|word| word.chars().filter(|c| c.is_alphabetic()).collect())
+            .filter_map(|word| {
+                if !word.is_empty() {
+                    Some(
+                        word.chars()
+                            .filter(|c| c.is_alphabetic())
+                            .map(|c| c.to_lowercase().collect::<String>())
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<String>>();
         for word in words {
             if !map.contains_key(&*word) {
@@ -20,8 +31,8 @@ impl worker::WorkerTrait for MyWorker {
         map
     }
 
-    fn reduce(key: &str, values: Vec<&str>) -> String {
-        "".to_string()
+    fn reduce(_key: &str, values: Vec<&str>) -> String {
+        values.len().to_string()
     }
 }
 

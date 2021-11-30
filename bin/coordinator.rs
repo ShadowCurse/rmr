@@ -10,7 +10,7 @@ pub mod coordinator {
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct WorkerJob {
     file: String,
     worker: Option<Uuid>,
@@ -43,7 +43,7 @@ impl MyCoordinator {
         }
         let data = CoordinatorData {
             map_tasks,
-            reduce_tasks: Default::default(),
+            reduce_tasks: vec![Default::default(); n as usize],
         };
         MyCoordinator {
             data: Arc::new(Mutex::new(data)),
@@ -80,6 +80,24 @@ impl MyCoordinator {
         let mut data = self.data.lock().unwrap();
         data.map_tasks[task.id as usize].results = task.files;
     }
+
+    fn assign_reduce_task(&self, worker: &Uuid) -> Option<TaskDescription> {
+        let mut data = self.data.lock().unwrap();
+        let task_pos = data
+            .reduce_tasks
+            .iter()
+            .position(|mt| mt.worker.is_none())?;
+        data.reduce_tasks[task_pos].worker = Some(worker.clone());
+
+        let files = data.map_tasks.iter().map(|task| {task.results[task_pos].clone()}).collect();
+
+        Some(TaskDescription {
+            id: task_pos as u32,
+            task_type: TaskType::Reduce as i32,
+            n: self.n,
+            files,
+        })
+    }
 }
 
 #[tonic::async_trait]
@@ -94,6 +112,7 @@ impl Coordinator for MyCoordinator {
         // check for unfinished map tasks (or those which take too long)
         let reply = self
             .assign_map_task(&worker_uuid)
+            .or_else(|| self.assign_reduce_task(&worker_uuid))
             .unwrap_or(Default::default());
         // check for reduce tasks
 
@@ -108,16 +127,23 @@ impl Coordinator for MyCoordinator {
         let worker_uuid = self
             .get_worker_uuid(finished_task.id as usize)
             .unwrap_or(Default::default());
-        println!("Worker {} finished task", worker_uuid);
+        println!(
+            "Worker {} finished task {:#?}",
+            worker_uuid, finished_task
+        );
 
         let reply = match finished_task.task_type {
             0 => {
                 self.record_map_task(finished_task);
                 self.assign_map_task(&worker_uuid)
+                    .or_else(|| self.assign_reduce_task(&worker_uuid))
                     .unwrap_or(Default::default())
             }
-            _ => Default::default(),
+            _ => self
+                .assign_reduce_task(&worker_uuid)
+                .unwrap_or(Default::default()),
         };
+        println!("Responding with: {:#?}", reply);
 
         Ok(Response::new(reply))
     }

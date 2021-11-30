@@ -41,7 +41,7 @@ impl<T: WorkerTrait> MRWorker<T> {
             println!("Received task: {:?}", task);
             let result = match task.task_type {
                 0 => Self::run_map(task),
-                _ => Self::run_reduce(&task),
+                _ => Self::run_reduce(task),
             };
             let request = tonic::Request::new(result);
             let response = self.client.task_done(request).await?;
@@ -74,8 +74,33 @@ impl<T: WorkerTrait> MRWorker<T> {
         task
     }
 
-    fn run_reduce(task: &TaskDescription) -> TaskDescription {
-        TaskDescription::default()
+    fn run_reduce(task: TaskDescription) -> TaskDescription {
+        let content = std::fs::read_to_string(&task.files[0]).unwrap();
+        let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
+        for line in content.split('\n').into_iter() {
+            let pair = line.split_ascii_whitespace().collect::<Vec<_>>();
+            if pair.len() != 2 {
+                println!("line: {}", line);
+                continue;
+            }
+            match map.get_mut(pair[0]) {
+                Some(vals) => vals.push(pair[1]),
+                None => {
+                    let _ = map.insert(pair[0], vec![pair[1]]);
+                }
+            }
+        }
+        let reduce_results = map
+            .into_iter()
+            .map(|(key, values)| (key, T::reduce(key, values)))
+            .collect::<Vec<_>>();
+        for (i, (key, val)) in reduce_results.iter().enumerate() {
+            let file_name = format!("./tmp/reduce-{}-{}", task.id, i);
+            let mut file = std::fs::File::create(&file_name).unwrap();
+            file.write(format!("{} {}\n", key, val).as_bytes()).unwrap();
+        }
+
+        task
     }
 
     fn shuffle(data: &HashMap<String, Vec<String>>, n: u64) -> Vec<Vec<&str>> {
