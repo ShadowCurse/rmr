@@ -1,5 +1,5 @@
 syntax = "proto3";
-package coordinator;
+package rmr_grpc;
 
 service Coordinator {
   rpc RequestTask (WorkerDescription) returns (TaskDescription);
@@ -9,14 +9,26 @@ service Coordinator {
 message WorkerDescription {
   bytes uuid = 1;
 }
+ 
+enum TaskType {
+  MAP = 0;
+  REDUCE = 1;
+}
 
 message TaskDescription {
   uint32 id = 1;
-  enum TaskType {
-    MAP = 0;
-    REDUCE = 1;
-  }
   TaskType task_type = 2;
   uint32 n = 3;
   repeated string files = 4;
+}
+
+service Worker {
+  rpc CurrentTask (GetCurrentTask) returns (CurrentTaskDescription);
+}
+
+message GetCurrentTask {}
+
+message CurrentTaskDescription {
+  uint32 id = 1;
+  TaskType task_type = 2;
 }

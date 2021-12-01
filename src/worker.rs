@@ -1,9 +1,8 @@
-use coordinator::coordinator_client::CoordinatorClient;
-use coordinator::{task_description::TaskType, TaskDescription, WorkerDescription};
-
-pub mod coordinator {
-    tonic::include_proto!("coordinator");
+pub mod rmr_grpc {
+    tonic::include_proto!("rmr_grpc");
 }
+use rmr_grpc::coordinator_client::CoordinatorClient;
+use rmr_grpc::{TaskDescription, WorkerDescription};
 
 use std::collections::HashMap;
 use std::io::Write;

@@ -1,11 +1,10 @@
-use tonic::{transport::Server, Request, Response, Status};
-
-use coordinator::coordinator_server::{Coordinator, CoordinatorServer};
-use coordinator::{task_description::TaskType, TaskDescription, WorkerDescription};
-
-pub mod coordinator {
-    tonic::include_proto!("coordinator");
+pub mod rmr_grpc {
+    tonic::include_proto!("rmr_grpc");
 }
+use rmr_grpc::coordinator_server::{Coordinator, CoordinatorServer};
+use rmr_grpc::{TaskType, TaskDescription, WorkerDescription};
+
+use tonic::{transport::Server, Request, Response, Status};
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
