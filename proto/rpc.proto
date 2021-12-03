@@ -4,6 +4,8 @@ package rmr_grpc;
 service Coordinator {
   rpc RequestTask (WorkerDescription) returns (TaskDescription);
   rpc TaskDone (TaskDescription) returns (TaskDescription);
+  rpc TaskFailed (CurrentTask) returns (Acknowledge);
+  rpc NotifyWorking (CurrentTask) returns (Acknowledge);
 }
 
 message WorkerDescription {
@@ -22,13 +24,10 @@ message TaskDescription {
   repeated string files = 4;
 }
 
-service Worker {
-  rpc CurrentTask (GetCurrentTask) returns (CurrentTaskDescription);
+message CurrentTask {
+  bytes uuid = 1;
+  uint32 id = 2;
+  TaskType task_type = 3;
 }
 
-message GetCurrentTask {}
-
-message CurrentTaskDescription {
-  uint32 id = 1;
-  TaskType task_type = 2;
-}
+message Acknowledge {}

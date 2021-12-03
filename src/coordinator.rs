@@ -2,7 +2,7 @@ pub mod rmr_grpc {
     tonic::include_proto!("rmr_grpc");
 }
 use rmr_grpc::coordinator_server::{Coordinator, CoordinatorServer};
-use rmr_grpc::{TaskType, TaskDescription, WorkerDescription};
+use rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescription};
 
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -60,22 +60,13 @@ impl MRCoordinator {
     }
 
     fn get_worker_uuid(&self, id: usize) -> Option<Uuid> {
-        Some(
-            self.data
-                .lock()
-                .unwrap()
-                .map_tasks
-                .get(id)?
-                .worker
-                .as_ref()?
-                .clone(),
-        )
+        self.data.lock().unwrap().map_tasks.get(id)?.worker
     }
 
     fn assign_map_task(&self, worker: &Uuid) -> Option<TaskDescription> {
         let mut data = self.data.lock().unwrap();
         let task_pos = data.map_tasks.iter().position(|mt| mt.worker.is_none())?;
-        data.map_tasks[task_pos].worker = Some(worker.clone());
+        data.map_tasks[task_pos].worker = Some(*worker);
         Some(TaskDescription {
             id: task_pos as u32,
             task_type: TaskType::Map as i32,
@@ -95,7 +86,7 @@ impl MRCoordinator {
             .reduce_tasks
             .iter()
             .position(|mt| mt.worker.is_none())?;
-        data.reduce_tasks[task_pos].worker = Some(worker.clone());
+        data.reduce_tasks[task_pos].worker = Some(*worker);
 
         let files = data
             .map_tasks
@@ -125,7 +116,7 @@ impl Coordinator for MRCoordinator {
         let reply = self
             .assign_map_task(&worker_uuid)
             .or_else(|| self.assign_reduce_task(&worker_uuid))
-            .unwrap_or(Default::default());
+            .unwrap_or_default();
         // check for reduce tasks
 
         Ok(Response::new(reply))
@@ -138,7 +129,7 @@ impl Coordinator for MRCoordinator {
         let finished_task = request.into_inner();
         let worker_uuid = self
             .get_worker_uuid(finished_task.id as usize)
-            .unwrap_or(Default::default());
+            .unwrap_or_default();
         println!("Worker {} finished task {:#?}", worker_uuid, finished_task);
 
         let reply = match finished_task.task_type {
@@ -146,14 +137,28 @@ impl Coordinator for MRCoordinator {
                 self.record_map_task(finished_task);
                 self.assign_map_task(&worker_uuid)
                     .or_else(|| self.assign_reduce_task(&worker_uuid))
-                    .unwrap_or(Default::default())
+                    .unwrap_or_default()
             }
-            _ => self
-                .assign_reduce_task(&worker_uuid)
-                .unwrap_or(Default::default()),
+            _ => self.assign_reduce_task(&worker_uuid).unwrap_or_default(),
         };
         println!("Responding with: {:#?}", reply);
 
         Ok(Response::new(reply))
+    }
+
+    async fn task_failed(
+        &self,
+        request: Request<CurrentTask>,
+    ) -> Result<Response<Acknowledge>, Status> {
+        println!("Got failed task: {:#?}", request.into_inner());
+        Ok(Response::new(Acknowledge::default()))
+    }
+
+    async fn notify_working(
+        &self,
+        request: Request<CurrentTask>,
+    ) -> Result<Response<Acknowledge>, Status> {
+        println!("Got notification: {:#?}", request.into_inner());
+        Ok(Response::new(Acknowledge::default()))
     }
 }

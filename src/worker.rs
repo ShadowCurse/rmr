@@ -2,12 +2,17 @@ pub mod rmr_grpc {
     tonic::include_proto!("rmr_grpc");
 }
 use rmr_grpc::coordinator_client::CoordinatorClient;
-use rmr_grpc::{TaskDescription, WorkerDescription};
+use rmr_grpc::{CurrentTask, TaskDescription, WorkerDescription};
+
+use futures::{future::select, future::Either, pin_mut};
+use tokio::time::sleep;
+use tonic::Request;
+use uuid::Uuid;
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::marker::PhantomData;
-use uuid::Uuid;
+use std::time::Duration;
 
 pub trait WorkerTrait {
     fn map(key: &str, value: &str) -> HashMap<String, Vec<String>>;
@@ -17,7 +22,8 @@ pub trait WorkerTrait {
 pub struct MRWorker<T: WorkerTrait> {
     uuid: Uuid,
     client: CoordinatorClient<tonic::transport::Channel>,
-    _phantom: PhantomData<T>,
+    current_task: CurrentTask,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T: WorkerTrait> MRWorker<T> {
@@ -26,6 +32,7 @@ impl<T: WorkerTrait> MRWorker<T> {
         Ok(MRWorker {
             uuid: Uuid::new_v4(),
             client,
+            current_task: Default::default(),
             _phantom: PhantomData,
         })
     }
@@ -37,16 +44,51 @@ impl<T: WorkerTrait> MRWorker<T> {
         let response = self.client.request_task(request).await?;
         let mut task = response.into_inner();
         while !task.files.is_empty() {
+            // spawning notification task
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            let current_task = self.current_task.clone();
+            let client = self.client.clone();
+            let notify_handle =
+                tokio::spawn(
+                    async move { Self::notify_coordinator(current_task, client, rx).await },
+                );
+
             println!("Received task: {:?}", task);
             let result = match task.task_type {
                 0 => Self::run_map(task),
                 _ => Self::run_reduce(task),
             };
+
+            // stoping notification task
+            tx.send(()).await?;
+            notify_handle.await?;
+
+            println!("Task done");
+
             let request = tonic::Request::new(result);
             let response = self.client.task_done(request).await?;
             task = response.into_inner();
         }
         Ok(())
+    }
+
+    async fn notify_coordinator(
+        current_task: CurrentTask,
+        mut client: CoordinatorClient<tonic::transport::Channel>,
+        mut rx: tokio::sync::mpsc::Receiver<()>,
+    ) {
+        loop {
+            let notify_msg = Request::new(current_task.clone());
+            let _ = client.notify_working(notify_msg).await.unwrap();
+            let rx = rx.recv();
+            pin_mut!(rx);
+            let sleep = sleep(Duration::from_secs(1));
+            pin_mut!(sleep);
+            match select(rx, sleep).await {
+                Either::Left((_, _)) => break,
+                Either::Right((_, _)) => continue,
+            }
+        }
     }
 
     fn run_map(mut task: TaskDescription) -> TaskDescription {
@@ -64,7 +106,8 @@ impl<T: WorkerTrait> MRWorker<T> {
             let mut file = std::fs::File::create(&file_name).unwrap();
             for key in keys.iter() {
                 for val in map_result[*key].iter() {
-                    file.write(format!("{} {}\n", key, val).as_bytes()).unwrap();
+                    file.write_all(format!("{} {}\n", key, val).as_bytes())
+                        .unwrap();
                 }
             }
             files[i] = file_name;
@@ -96,7 +139,8 @@ impl<T: WorkerTrait> MRWorker<T> {
         for (i, (key, val)) in reduce_results.iter().enumerate() {
             let file_name = format!("./tmp/reduce-{}-{}", task.id, i);
             let mut file = std::fs::File::create(&file_name).unwrap();
-            file.write(format!("{} {}\n", key, val).as_bytes()).unwrap();
+            file.write_all(format!("{} {}\n", key, val).as_bytes())
+                .unwrap();
         }
 
         task
