@@ -1,7 +1,7 @@
 pub mod rmr_grpc {
     tonic::include_proto!("rmr_grpc");
 }
-use rmr_grpc::coordinator_client::CoordinatorClient;
+use rmr_grpc::coordinator_service_client::CoordinatorServiceClient;
 use rmr_grpc::{CurrentTask, TaskDescription, WorkerDescription};
 
 use futures::{future::select, future::Either, pin_mut};
@@ -21,14 +21,14 @@ pub trait WorkerTrait {
 
 pub struct MRWorker<T: WorkerTrait> {
     uuid: Uuid,
-    client: CoordinatorClient<tonic::transport::Channel>,
+    client: CoordinatorServiceClient<tonic::transport::Channel>,
     current_task: CurrentTask,
     _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T: WorkerTrait> MRWorker<T> {
     pub async fn new(client: &'static str) -> Result<MRWorker<T>, Box<dyn std::error::Error>> {
-        let client = CoordinatorClient::connect(client).await?;
+        let client = CoordinatorServiceClient::connect(client).await?;
         Ok(MRWorker {
             uuid: Uuid::new_v4(),
             client,
@@ -74,7 +74,7 @@ impl<T: WorkerTrait> MRWorker<T> {
 
     async fn notify_coordinator(
         current_task: CurrentTask,
-        mut client: CoordinatorClient<tonic::transport::Channel>,
+        mut client: CoordinatorServiceClient<tonic::transport::Channel>,
         mut rx: tokio::sync::mpsc::Receiver<()>,
     ) {
         loop {

@@ -1,7 +1,7 @@
 pub mod rmr_grpc {
     tonic::include_proto!("rmr_grpc");
 }
-use rmr_grpc::coordinator_server::{Coordinator, CoordinatorServer};
+use rmr_grpc::coordinator_service_server::{CoordinatorService, CoordinatorServiceServer};
 use rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescription};
 
 use tonic::{transport::Server, Request, Response, Status};
@@ -10,6 +10,32 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[derive(Debug)]
+pub struct Coordinator {
+    data_path: String,
+    reduce_tasks: u32,
+    addr: SocketAddr,
+}
+
+impl Coordinator {
+    pub fn new(data_path: String, reduce_tasks: u32, addr: SocketAddr) -> Self {
+        Coordinator {
+            data_path,
+            reduce_tasks,
+            addr,
+        }
+    }
+
+    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let coordinator = MRCoordinator::new(self.data_path.clone(), self.reduce_tasks)?;
+        Server::builder()
+            .add_service(CoordinatorServiceServer::new(coordinator))
+            .serve(self.addr)
+            .await?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct WorkerJob {
     file: String,
@@ -17,46 +43,47 @@ struct WorkerJob {
     results: Vec<String>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct ReduceTask {
+    worker: Option<Uuid>,
+}
+
 #[derive(Debug, Default)]
 pub struct CoordinatorData {
     map_tasks: Vec<WorkerJob>,
-    reduce_tasks: Vec<WorkerJob>,
+    reduce_tasks: Vec<ReduceTask>,
 }
 
 #[derive(Debug, Default)]
-pub struct MRCoordinator {
+struct MRCoordinator {
     data: Arc<Mutex<CoordinatorData>>,
-    n: u32,
+    reduce_tasks: u32,
 }
 
 impl MRCoordinator {
-    pub fn new(data_path: String, n: u32) -> MRCoordinator {
-        let paths = std::fs::read_dir(&data_path).unwrap();
+    pub(crate) fn new(
+        data_path: String,
+        reduce_tasks: u32,
+    ) -> Result<MRCoordinator, Box<dyn std::error::Error>> {
+        let paths = std::fs::read_dir(&data_path)?;
         let map_tasks = paths
             .map(|path| WorkerJob {
                 file: path.unwrap().path().to_str().unwrap().to_string(),
                 ..Default::default()
             })
             .collect::<Vec<_>>();
-        for wt in map_tasks.iter() {
-            println!("Found file: {}", wt.file);
-        }
+
+        println!("Found files: {:#?}", map_tasks);
+
         let data = CoordinatorData {
             map_tasks,
-            reduce_tasks: vec![Default::default(); n as usize],
+            reduce_tasks: vec![Default::default(); reduce_tasks as usize],
         };
-        MRCoordinator {
-            data: Arc::new(Mutex::new(data)),
-            n,
-        }
-    }
 
-    pub async fn run(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-        Server::builder()
-            .add_service(CoordinatorServer::new(self))
-            .serve(addr)
-            .await?;
-        Ok(())
+        Ok(MRCoordinator {
+            data: Arc::new(Mutex::new(data)),
+            reduce_tasks,
+        })
     }
 
     fn get_worker_uuid(&self, id: usize) -> Option<Uuid> {
@@ -70,7 +97,7 @@ impl MRCoordinator {
         Some(TaskDescription {
             id: task_pos as u32,
             task_type: TaskType::Map as i32,
-            n: self.n,
+            n: self.reduce_tasks,
             files: vec![data.map_tasks[task_pos].file.clone()],
         })
     }
@@ -97,14 +124,14 @@ impl MRCoordinator {
         Some(TaskDescription {
             id: task_pos as u32,
             task_type: TaskType::Reduce as i32,
-            n: self.n,
+            n: self.reduce_tasks,
             files,
         })
     }
 }
 
 #[tonic::async_trait]
-impl Coordinator for MRCoordinator {
+impl CoordinatorService for MRCoordinator {
     async fn request_task(
         &self,
         request: Request<WorkerDescription>,
