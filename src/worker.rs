@@ -29,10 +29,14 @@ pub struct MRWorker<T: WorkerTrait> {
 impl<T: WorkerTrait> MRWorker<T> {
     pub async fn new(client: &'static str) -> Result<MRWorker<T>, Box<dyn std::error::Error>> {
         let client = CoordinatorServiceClient::connect(client).await?;
+        let uuid = Uuid::new_v4();
         Ok(MRWorker {
-            uuid: Uuid::new_v4(),
+            uuid,
             client,
-            current_task: Default::default(),
+            current_task: CurrentTask {
+                uuid: uuid.as_bytes().to_vec(),
+                ..Default::default()
+            },
             _phantom: PhantomData,
         })
     }
@@ -44,6 +48,9 @@ impl<T: WorkerTrait> MRWorker<T> {
         let response = self.client.request_task(request).await?;
         let mut task = response.into_inner();
         while !task.files.is_empty() {
+            self.current_task.id = task.id;
+            self.current_task.task_type = task.task_type;
+
             // spawning notification task
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             let current_task = self.current_task.clone();
@@ -78,15 +85,16 @@ impl<T: WorkerTrait> MRWorker<T> {
         mut rx: tokio::sync::mpsc::Receiver<()>,
     ) {
         loop {
-            let notify_msg = Request::new(current_task.clone());
-            let _ = client.notify_working(notify_msg).await.unwrap();
             let rx = rx.recv();
             pin_mut!(rx);
             let sleep = sleep(Duration::from_secs(1));
             pin_mut!(sleep);
             match select(rx, sleep).await {
                 Either::Left((_, _)) => break,
-                Either::Right((_, _)) => continue,
+                Either::Right((_, _)) => {
+                    let notify_msg = Request::new(current_task.clone());
+                    let _ = client.notify_working(notify_msg).await.unwrap();
+                }
             }
         }
     }
@@ -121,6 +129,8 @@ impl<T: WorkerTrait> MRWorker<T> {
         let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
         for line in content.split('\n').into_iter() {
             let pair = line.split_ascii_whitespace().collect::<Vec<_>>();
+
+            // TODO find out why some lines are incorrect
             if pair.len() != 2 {
                 println!("line: {}", line);
                 continue;
