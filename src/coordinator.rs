@@ -6,6 +6,7 @@ use rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescri
 
 use tonic::{transport::Server, Request, Response, Status};
 
+use std::fs::read_dir;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -35,6 +36,7 @@ impl Coordinator {
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Stating coordinator with parameters:\n{:#?}", self);
         let coordinator = MRCoordinator::new(
             self.data_path.clone(),
             self.reduce_tasks,
@@ -42,6 +44,7 @@ impl Coordinator {
         )?;
         Server::builder()
             .add_service(CoordinatorServiceServer::new(coordinator))
+            // TODO use serve_with_shutdown to stop coordinator when all tasks are done
             .serve(self.addr)
             .await?;
         Ok(())
@@ -61,6 +64,13 @@ impl Default for TaskState {
     }
 }
 
+trait Task {
+    fn worker(&self) -> &Option<Uuid>;
+    fn state(&self) -> &TaskState;
+    fn set_worker(&mut self, worker: Uuid);
+    fn set_state(&mut self, state: TaskState);
+}
+
 #[derive(Debug, Default, Clone)]
 struct MapTask {
     file: String,
@@ -69,10 +79,40 @@ struct MapTask {
     results: Vec<String>,
 }
 
+impl Task for MapTask {
+    fn worker(&self) -> &Option<Uuid> {
+        &self.worker
+    }
+    fn state(&self) -> &TaskState {
+        &self.state
+    }
+    fn set_worker(&mut self, worker: Uuid) {
+        self.worker = Some(worker);
+    }
+    fn set_state(&mut self, state: TaskState) {
+        self.state = state;
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct ReduceTask {
     worker: Option<Uuid>,
     state: TaskState,
+}
+
+impl Task for ReduceTask {
+    fn worker(&self) -> &Option<Uuid> {
+        &self.worker
+    }
+    fn state(&self) -> &TaskState {
+        &self.state
+    }
+    fn set_worker(&mut self, worker: Uuid) {
+        self.worker = Some(worker);
+    }
+    fn set_state(&mut self, state: TaskState) {
+        self.state = state;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -89,20 +129,31 @@ struct MRCoordinator {
 }
 
 impl MRCoordinator {
-    pub(crate) fn new(
+    pub fn new(
         data_path: String,
         reduce_tasks: u32,
         dead_task_delta: u32,
     ) -> Result<MRCoordinator, Box<dyn std::error::Error>> {
-        let paths = std::fs::read_dir(&data_path)?;
+        let paths = read_dir(&data_path)?;
+
+        let paths = paths
+            .map(|path| path.map(|p| p.path()))
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
         let map_tasks = paths
-            .map(|path| MapTask {
-                file: path.unwrap().path().to_str().unwrap().to_string(),
-                ..Default::default()
+            .iter()
+            .filter_map(|path| {
+                if path.is_file() {
+                    let file = path.to_str().unwrap().to_string();
+                    println!("Found file: {:#?}", file);
+                    Some(MapTask {
+                        file,
+                        ..Default::default()
+                    })
+                } else {
+                    None
+                }
             })
             .collect::<Vec<_>>();
-
-        println!("Found files: {:#?}", map_tasks);
 
         let data = CoordinatorData {
             map_tasks,
@@ -122,6 +173,33 @@ impl MRCoordinator {
 
     fn reduce_worker_uuid_by_id(&self, id: usize) -> Option<Uuid> {
         self.data.lock().unwrap().reduce_tasks.get(id)?.worker
+    }
+
+    fn assign_map_task(&self, worker: &Uuid) -> Option<TaskDescription> {
+        let mut data = self.data.lock().unwrap();
+        let task_pos = self.update_task_data(&mut data.map_tasks, worker)?;
+        Some(TaskDescription {
+            id: task_pos as u32,
+            task_type: TaskType::Map as i32,
+            n: self.reduce_tasks,
+            files: vec![data.map_tasks[task_pos].file.clone()],
+        })
+    }
+
+    fn assign_reduce_task(&self, worker: &Uuid) -> Option<TaskDescription> {
+        let mut data = self.data.lock().unwrap();
+        let task_pos = self.update_task_data(&mut data.reduce_tasks, worker)?;
+        let files = data
+            .map_tasks
+            .iter()
+            .map(|task| task.results[task_pos].clone())
+            .collect();
+        Some(TaskDescription {
+            id: task_pos as u32,
+            task_type: TaskType::Reduce as i32,
+            n: self.reduce_tasks,
+            files,
+        })
     }
 
     fn update_task_status(&self, task_description: CurrentTask, state: TaskState) {
@@ -145,61 +223,23 @@ impl MRCoordinator {
         }
     }
 
-    fn assign_map_task(&self, worker: &Uuid) -> Option<TaskDescription> {
-        let mut data = self.data.lock().unwrap();
-        let task_pos = data.map_tasks.iter().position(|mt| {
-            // if not started or last timestamp was too long ago
-            match mt.state {
-                TaskState::NotStarted => true,
-                TaskState::InProgress(last_timestamp) => {
-                    last_timestamp.elapsed().as_secs() > self.dead_task_delta as u64
-                }
-                TaskState::Finished => false,
+    fn update_task_data(&self, tasks: &mut Vec<impl Task>, worker: &Uuid) -> Option<usize> {
+        let task_pos = tasks.iter().position(|t| match t.state() {
+            TaskState::NotStarted => true,
+            TaskState::InProgress(last_timestamp) => {
+                last_timestamp.elapsed().as_secs() > self.dead_task_delta as u64
             }
+            TaskState::Finished => false,
         })?;
-        data.map_tasks[task_pos].worker = Some(*worker);
-        data.map_tasks[task_pos].state = TaskState::InProgress(Instant::now());
-        Some(TaskDescription {
-            id: task_pos as u32,
-            task_type: TaskType::Map as i32,
-            n: self.reduce_tasks,
-            files: vec![data.map_tasks[task_pos].file.clone()],
-        })
+        tasks[task_pos].set_worker(*worker);
+        tasks[task_pos].set_state(TaskState::InProgress(Instant::now()));
+        Some(task_pos)
     }
 
     fn record_map_task(&self, task: TaskDescription) {
         let mut data = self.data.lock().unwrap();
         data.map_tasks[task.id as usize].results = task.files;
         data.map_tasks[task.id as usize].state = TaskState::Finished;
-    }
-
-    fn assign_reduce_task(&self, worker: &Uuid) -> Option<TaskDescription> {
-        let mut data = self.data.lock().unwrap();
-        let task_pos = data.reduce_tasks.iter().position(|rt| {
-            // if not started or last timestamp was too long ago
-            match rt.state {
-                TaskState::NotStarted => true,
-                TaskState::InProgress(last_timestamp) => {
-                    last_timestamp.elapsed().as_secs() > self.dead_task_delta as u64
-                }
-                TaskState::Finished => false,
-            }
-        })?;
-        data.reduce_tasks[task_pos].worker = Some(*worker);
-        data.reduce_tasks[task_pos].state = TaskState::InProgress(Instant::now());
-
-        let files = data
-            .map_tasks
-            .iter()
-            .map(|task| task.results[task_pos].clone())
-            .collect();
-
-        Some(TaskDescription {
-            id: task_pos as u32,
-            task_type: TaskType::Reduce as i32,
-            n: self.reduce_tasks,
-            files,
-        })
     }
 }
 
