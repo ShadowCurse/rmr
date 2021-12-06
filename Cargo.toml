@@ -19,6 +19,7 @@ prost = "0.9"
 tokio = { version = "1.12", features = ["macros", "rt-multi-thread"]  }
 futures = "0.3.18"
 uuid = { version = "0.4", features = ["v4"] }
+structopt = "0.3.25"
 
 [build-dependencies]
 tonic-build = "0.6"
