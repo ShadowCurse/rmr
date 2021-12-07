@@ -27,7 +27,7 @@ pub struct MRWorker<T: WorkerTrait> {
 }
 
 impl<T: WorkerTrait> MRWorker<T> {
-    pub async fn new(client: &'static str) -> Result<MRWorker<T>, Box<dyn std::error::Error>> {
+    pub async fn new(client: String) -> Result<MRWorker<T>, Box<dyn std::error::Error>> {
         let client = CoordinatorServiceClient::connect(client).await?;
         let uuid = Uuid::new_v4();
         Ok(MRWorker {

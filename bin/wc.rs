@@ -1,9 +1,8 @@
-use rmr::worker;
+use rmr::{worker::WorkerTrait, map_reduce};
 use std::collections::HashMap;
 
 struct MyWorker;
-
-impl worker::WorkerTrait for MyWorker {
+impl WorkerTrait for MyWorker {
     fn map(_key: &str, value: &str) -> HashMap<String, Vec<String>> {
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         let words = value
@@ -36,9 +35,4 @@ impl worker::WorkerTrait for MyWorker {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut worker = worker::MRWorker::<MyWorker>::new("http://[::1]:50051").await?;
-    worker.run().await?;
-    Ok(())
-}
+map_reduce!(MyWorker);

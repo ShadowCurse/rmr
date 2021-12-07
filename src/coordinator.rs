@@ -13,21 +13,21 @@ use std::time::Instant;
 use uuid::Uuid;
 
 #[derive(Debug)]
-pub struct Coordinator {
+pub struct MRCoordinator {
     data_path: String,
     reduce_tasks: u32,
     dead_task_delta: u32,
     addr: SocketAddr,
 }
 
-impl Coordinator {
+impl MRCoordinator {
     pub fn new(
         data_path: String,
         reduce_tasks: u32,
         dead_task_delta: u32,
         addr: SocketAddr,
     ) -> Self {
-        Coordinator {
+        MRCoordinator {
             data_path,
             reduce_tasks,
             dead_task_delta,
@@ -37,7 +37,7 @@ impl Coordinator {
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Stating coordinator with parameters:\n{:#?}", self);
-        let coordinator = MRCoordinator::new(
+        let coordinator = MRCoordinatorImpl::new(
             self.data_path.clone(),
             self.reduce_tasks,
             self.dead_task_delta,
@@ -122,18 +122,18 @@ pub struct CoordinatorData {
 }
 
 #[derive(Debug, Default)]
-struct MRCoordinator {
+struct MRCoordinatorImpl {
     data: Mutex<CoordinatorData>,
     reduce_tasks: u32,
     dead_task_delta: u32,
 }
 
-impl MRCoordinator {
+impl MRCoordinatorImpl {
     pub fn new(
         data_path: String,
         reduce_tasks: u32,
         dead_task_delta: u32,
-    ) -> Result<MRCoordinator, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let paths = read_dir(&data_path)?;
 
         let paths = paths
@@ -160,7 +160,7 @@ impl MRCoordinator {
             reduce_tasks: vec![Default::default(); reduce_tasks as usize],
         };
 
-        Ok(MRCoordinator {
+        Ok(Self {
             data: Mutex::new(data),
             reduce_tasks,
             dead_task_delta,
@@ -244,7 +244,7 @@ impl MRCoordinator {
 }
 
 #[tonic::async_trait]
-impl CoordinatorService for MRCoordinator {
+impl CoordinatorService for MRCoordinatorImpl {
     async fn request_task(
         &self,
         request: Request<WorkerDescription>,
