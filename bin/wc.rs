@@ -1,4 +1,4 @@
-use rmr::{worker::WorkerTrait, map_reduce};
+use rmr::{map_reduce, worker::WorkerTrait};
 use std::collections::HashMap;
 
 struct MyWorker;
@@ -8,13 +8,13 @@ impl WorkerTrait for MyWorker {
         let words = value
             .split_ascii_whitespace()
             .filter_map(|word| {
-                if !word.is_empty() {
-                    Some(
-                        word.chars()
-                            .filter(|c| c.is_alphabetic())
-                            .map(|c| c.to_lowercase().collect::<String>())
-                            .collect(),
-                    )
+                let filtered = word
+                    .chars()
+                    .filter(|c| c.is_alphabetic())
+                    .map(|c| c.to_lowercase().collect::<String>())
+                    .collect::<String>();
+                if !filtered.is_empty() {
+                    Some(filtered)
                 } else {
                     None
                 }
@@ -36,3 +36,39 @@ impl WorkerTrait for MyWorker {
 }
 
 map_reduce!(MyWorker);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_test() {
+        let data = vec![
+            ("algernon", vec!["1"]),
+            ("and", vec!["1"]),
+            ("who", vec!["1"]),
+            ("are", vec!["1"]),
+            ("the", vec!["1"]),
+            ("people", vec!["1"]),
+            ("you", vec!["1"]),
+            ("amuse", vec!["1"]),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+        let res = MyWorker::map(
+            &"".to_string(),
+            &"Algernon.  And who are the people you amuse?".to_string(),
+        );
+        for (k, v) in data.iter() {
+            assert!(res.contains_key(*k));
+            assert!(res[*k].len() == v.len());
+            assert!(res[*k][0] == v[0]);
+        }
+
+        for (k, v) in res.iter() {
+            let values = v.iter().map(String::as_str).collect();
+            let reduce_res = MyWorker::reduce(k, values);
+            assert!(reduce_res == 1.to_string());
+        }
+    }
+}
