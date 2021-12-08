@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 struct MyWorker;
 impl WorkerTrait for MyWorker {
-    fn map(_key: &str, value: &str) -> HashMap<String, Vec<String>> {
+    fn map(_key: String, value: String) -> HashMap<String, Vec<String>> {
         let mut map: HashMap<String, Vec<String>> = HashMap::new();
         let words = value
             .split_ascii_whitespace()
@@ -30,7 +30,7 @@ impl WorkerTrait for MyWorker {
         map
     }
 
-    fn reduce(_key: &str, values: Vec<&str>) -> String {
+    fn reduce(_key: String, values: Vec<String>) -> String {
         values.len().to_string()
     }
 }

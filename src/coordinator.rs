@@ -241,6 +241,11 @@ impl MRCoordinatorImpl {
         data.map_tasks[task.id as usize].results = task.files;
         data.map_tasks[task.id as usize].state = TaskState::Finished;
     }
+
+    fn record_reduce_task(&self, task: TaskDescription) {
+        let mut data = self.data.lock().unwrap();
+        data.reduce_tasks[task.id as usize].state = TaskState::Finished;
+    }
 }
 
 #[tonic::async_trait]
@@ -271,7 +276,10 @@ impl CoordinatorService for MRCoordinatorImpl {
             // Map
             0 => {
                 if let Some(worker_uuid) = self.map_worker_uuid_by_id(finished_task.id as usize) {
-                    println!("Map task finished. Worker: {:#?}", worker_uuid);
+                    println!(
+                        "Map task finished. Worker: {:#?}, task id: {}",
+                        worker_uuid, finished_task.id
+                    );
                     self.record_map_task(finished_task);
                     self.assign_map_task(&worker_uuid)
                         .or_else(|| self.assign_reduce_task(&worker_uuid))
@@ -284,13 +292,19 @@ impl CoordinatorService for MRCoordinatorImpl {
             _ => {
                 if let Some(worker_uuid) = self.reduce_worker_uuid_by_id(finished_task.id as usize)
                 {
-                    println!("Reduce task finished. Worker: {:#?}", worker_uuid);
+                    println!(
+                        "Reduce task finished. Worker: {:#?}, task id: {}",
+                        worker_uuid, finished_task.id
+                    );
+                    self.record_reduce_task(finished_task);
                     self.assign_reduce_task(&worker_uuid).unwrap_or_default()
                 } else {
                     Default::default()
                 }
             }
         };
+
+        println!("{:#?}", self.data.lock().unwrap().reduce_tasks);
 
         Ok(Response::new(reply))
     }

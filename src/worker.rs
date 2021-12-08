@@ -15,8 +15,8 @@ use std::marker::PhantomData;
 use std::time::Duration;
 
 pub trait WorkerTrait {
-    fn map(key: &str, value: &str) -> HashMap<String, Vec<String>>;
-    fn reduce(key: &str, values: Vec<&str>) -> String;
+    fn map(key: String, value: String) -> HashMap<String, Vec<String>>;
+    fn reduce(key: String, values: Vec<String>) -> String;
 }
 
 pub struct MRWorker<T: WorkerTrait> {
@@ -72,9 +72,18 @@ impl<T: WorkerTrait> MRWorker<T> {
 
             println!("Task done");
 
-            let request = tonic::Request::new(result);
-            let response = self.client.task_done(request).await?;
-            task = response.into_inner();
+            match result {
+                Ok(r) => {
+                    let request = tonic::Request::new(r);
+                    let response = self.client.task_done(request).await?;
+                    task = response.into_inner();
+                }
+                Err(e) => {
+                    let notify_msg = Request::new(self.current_task.clone());
+                    let _ = self.client.task_failed(notify_msg).await?;
+                    return Err(e);
+                }
+            };
         }
         Ok(())
     }
@@ -99,61 +108,60 @@ impl<T: WorkerTrait> MRWorker<T> {
         }
     }
 
-    fn run_map(mut task: TaskDescription) -> TaskDescription {
+    fn run_map(mut task: TaskDescription) -> Result<TaskDescription, Box<dyn std::error::Error>> {
         assert_eq!(task.files.len(), 1);
+        let file = task.files.pop().unwrap();
 
-        let content = std::fs::read_to_string(&task.files[0]).unwrap();
+        let content = std::fs::read_to_string(&file)?;
 
-        let map_result = T::map(&task.files[0], &content);
+        let map_result = T::map(file, content);
         let shuffle = Self::shuffle(&map_result, task.n as u64);
 
         let mut files = Vec::with_capacity(task.n as usize);
         files.resize(task.n as usize, "".to_string());
         for (i, keys) in shuffle.iter().enumerate() {
             let file_name = format!("./tmp/tmp-{}-{}", task.id, i);
-            let mut file = std::fs::File::create(&file_name).unwrap();
+            let mut file = std::fs::File::create(&file_name)?;
             for key in keys.iter() {
                 for val in map_result[*key].iter() {
-                    file.write_all(format!("{} {}\n", key, val).as_bytes())
-                        .unwrap();
+                    file.write_all(format!("{} {}\n", key, val).as_bytes())?;
                 }
             }
             files[i] = file_name;
         }
         task.files = files;
-        task
+        Ok(task)
     }
 
-    fn run_reduce(task: TaskDescription) -> TaskDescription {
-        let content = std::fs::read_to_string(&task.files[0]).unwrap();
-        let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
-        for line in content.split('\n').into_iter() {
-            let pair = line.split_ascii_whitespace().collect::<Vec<_>>();
+    fn run_reduce(task: TaskDescription) -> Result<TaskDescription, Box<dyn std::error::Error>> {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for file in task.files.iter() {
+            let content = std::fs::read_to_string(&file)?;
+            for line in content.split('\n').into_iter() {
+                let pair = line.split_ascii_whitespace().collect::<Vec<_>>();
 
-            // TODO find out why some lines are incorrect
-            if pair.len() != 2 {
-                println!("line: {}", line);
-                continue;
-            }
-            match map.get_mut(pair[0]) {
-                Some(vals) => vals.push(pair[1]),
-                None => {
-                    let _ = map.insert(pair[0], vec![pair[1]]);
+                if pair.len() != 2 {
+                    continue;
+                }
+
+                match map.get_mut(pair[0]) {
+                    Some(vals) => vals.push(pair[1].to_string()),
+                    None => {
+                        let _ = map.insert(pair[0].to_string(), vec![pair[1].to_string()]);
+                    }
                 }
             }
         }
         let reduce_results = map
             .into_iter()
-            .map(|(key, values)| (key, T::reduce(key, values)))
+            .map(|(key, values)| (key.clone(), T::reduce(key, values)))
             .collect::<Vec<_>>();
         for (i, (key, val)) in reduce_results.iter().enumerate() {
             let file_name = format!("./tmp/reduce-{}-{}", task.id, i);
-            let mut file = std::fs::File::create(&file_name).unwrap();
-            file.write_all(format!("{} {}\n", key, val).as_bytes())
-                .unwrap();
+            let mut file = std::fs::File::create(&file_name)?;
+            file.write_all(format!("{} {}\n", key, val).as_bytes())?;
         }
-
-        task
+        Ok(task)
     }
 
     fn shuffle(data: &HashMap<String, Vec<String>>, n: u64) -> Vec<Vec<&str>> {
