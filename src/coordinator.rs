@@ -4,6 +4,7 @@ pub mod rmr_grpc {
 use rmr_grpc::coordinator_service_server::{CoordinatorService, CoordinatorServiceServer};
 use rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescription};
 
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tonic::{transport::Server, Request, Response, Status};
 
 use std::fs::read_dir;
@@ -42,10 +43,13 @@ impl MRCoordinator {
             self.reduce_tasks,
             self.dead_task_delta,
         )?;
+        let service = CoordinatorServiceServer::new(coordinator);
+        let coordinator = service.inner();
         Server::builder()
-            .add_service(CoordinatorServiceServer::new(coordinator))
-            // TODO use serve_with_shutdown to stop coordinator when all tasks are done
-            .serve(self.addr)
+            .add_service(service)
+            .serve_with_shutdown(self.addr, async {
+                coordinator.shutdown().await;
+            })
             .await?;
         Ok(())
     }
@@ -121,11 +125,13 @@ pub struct CoordinatorData {
     reduce_tasks: Vec<ReduceTask>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct MRCoordinatorImpl {
     data: Mutex<CoordinatorData>,
     reduce_tasks: u32,
     dead_task_delta: u32,
+    send: Sender<()>,
+    recv: Mutex<Receiver<()>>,
 }
 
 impl MRCoordinatorImpl {
@@ -160,10 +166,15 @@ impl MRCoordinatorImpl {
             reduce_tasks: vec![Default::default(); reduce_tasks as usize],
         };
 
+        let (send, recv) = channel(1);
+        let recv = Mutex::new(recv);
+
         Ok(Self {
             data: Mutex::new(data),
             reduce_tasks,
             dead_task_delta,
+            send,
+            recv,
         })
     }
 
@@ -246,6 +257,11 @@ impl MRCoordinatorImpl {
         let mut data = self.data.lock().unwrap();
         data.reduce_tasks[task.id as usize].state = TaskState::Finished;
     }
+
+    pub async fn shutdown(&self) {
+        self.recv.lock().unwrap().recv().await;
+        println!("Shutdown");
+    }
 }
 
 #[tonic::async_trait]
@@ -257,7 +273,6 @@ impl CoordinatorService for MRCoordinatorImpl {
         let worker_uuid = Uuid::from_bytes(&request.into_inner().uuid).unwrap();
         println!("Got a request for a task from worker: {:?}", worker_uuid);
 
-        // check for unfinished map or reduce tasks (or those which take too long)
         let reply = self
             .assign_map_task(&worker_uuid)
             .or_else(|| self.assign_reduce_task(&worker_uuid))
@@ -297,14 +312,19 @@ impl CoordinatorService for MRCoordinatorImpl {
                         worker_uuid, finished_task.id
                     );
                     self.record_reduce_task(finished_task);
-                    self.assign_reduce_task(&worker_uuid).unwrap_or_default()
+                    match self.assign_reduce_task(&worker_uuid) {
+                        Some(td) => td,
+                        None => {
+                            println!("All done, shutting down");
+                            self.send.send(()).await.unwrap();
+                            TaskDescription::default()
+                        }
+                    }
                 } else {
                     Default::default()
                 }
             }
         };
-
-        println!("{:#?}", self.data.lock().unwrap().reduce_tasks);
 
         Ok(Response::new(reply))
     }
