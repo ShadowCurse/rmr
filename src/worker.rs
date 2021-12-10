@@ -1,8 +1,5 @@
-pub mod rmr_grpc {
-    tonic::include_proto!("rmr_grpc");
-}
-use rmr_grpc::coordinator_service_client::CoordinatorServiceClient;
-use rmr_grpc::{CurrentTask, TaskDescription, WorkerDescription};
+use crate::rmr_grpc::coordinator_service_client::CoordinatorServiceClient;
+use crate::rmr_grpc::{CurrentTask, TaskDescription, WorkerDescription};
 
 use futures::{future::select, future::Either, pin_mut};
 use tokio::time::sleep;

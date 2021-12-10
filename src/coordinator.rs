@@ -1,8 +1,5 @@
-pub mod rmr_grpc {
-    tonic::include_proto!("rmr_grpc");
-}
-use rmr_grpc::coordinator_service_server::{CoordinatorService, CoordinatorServiceServer};
-use rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescription};
+use crate::rmr_grpc::coordinator_service_server::{CoordinatorService, CoordinatorServiceServer};
+use crate::rmr_grpc::{Acknowledge, CurrentTask, TaskDescription, TaskType, WorkerDescription};
 
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tonic::{transport::Server, Request, Response, Status};
