@@ -56,8 +56,8 @@ mod tests {
         .into_iter()
         .collect::<HashMap<_, _>>();
         let res = MyWorker::map(
-            &"".to_string(),
-            &"Algernon.  And who are the people you amuse?".to_string(),
+            "".to_string(),
+            "Algernon.  And who are the people you amuse?".to_string(),
         );
         for (k, v) in data.iter() {
             assert!(res.contains_key(*k));
@@ -65,9 +65,8 @@ mod tests {
             assert!(res[*k][0] == v[0]);
         }
 
-        for (k, v) in res.iter() {
-            let values = v.iter().map(String::as_str).collect();
-            let reduce_res = MyWorker::reduce(k, values);
+        for (k, v) in res.into_iter() {
+            let reduce_res = MyWorker::reduce(k, v);
             assert!(reduce_res == 1.to_string());
         }
     }
